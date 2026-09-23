@@ -13,10 +13,14 @@ just superficially, different.
 tagging/difficulty metadata instead of quizzes as flat lists of questions,
 so the "due for review" queue could pull from across a student's whole
 enrollment rather than per-quiz; WebSocket-pushed live updates on the
-instructor dashboard instead of polling; and - the honest one - I'd have
-caught the three `LazyInitializationException` bugs documented below with a
-repository-layer integration test per entity relationship from the start,
-instead of finding them one at a time by actually clicking through the app.
+instructor dashboard instead of polling. The honest one from the first pass
+- I'd have caught the three `LazyInitializationException`/routing bugs
+documented below with a repository-layer test per entity relationship and a
+committed E2E suite from the start, instead of finding them one at a time by
+manually clicking through the app - is now closed: every one of those three
+bugs has a regression test (`CourseIntegrationTest`, and the E2E flow's
+explicit routing/rendering assertions), and `frontend/e2e/` runs against a
+real backend + Postgres in CI on every push, not just locally by hand.
 
 ## Why this exists, not just what it does
 
@@ -105,6 +109,20 @@ behavior, and recovery after a mistake.
   `SELECT ... FOR UPDATE` locking behaves differently (or isn't
   meaningfully testable at all) against H2's in-memory engine - testing
   against what production actually runs is the point.
+- **Rate limiting on auth endpoints**: `RateLimitFilter` throttles
+  `/api/auth/login` and `/api/auth/register` to 10 requests/minute per
+  client IP (token-bucket via Bucket4j), ahead of JWT parsing in the filter
+  chain - a brute-force login attempt shouldn't get a free pass through
+  authentication logic before being throttled, and unthrottled registration
+  is a cheap way to burn server CPU (`AuthService.register()` does a real,
+  deliberately-slow BCrypt hash per call). In-process/per-instance only -
+  scaling this horizontally would need shared bucket state (Bucket4j's
+  Redis/Hazelcast-backed `ProxyManager`), not implemented here to keep this
+  change's scope contained. `RateLimitIntegrationTest` exercises the actual
+  429 behavior, not just that the filter is wired in.
+- **`/actuator/health`**: exposes liveness for anything that wants to poll
+  it (a container orchestrator, an uptime check) without exposing full
+  actuator details (`management.endpoint.health.show-details: never`).
 
 ## Bugs found by actually running this (not hypothetical)
 
@@ -137,11 +155,19 @@ are not the same claim.
    instead of showing the quiz they'd just made. Fixed by redirecting to
    the course page instead, where the new quiz is listed.
 
-None of these were caught by the 32 passing backend tests, because none of
-those tests happened to chain "fetch an entity -> let the transaction end
--> read a lazy field" or "click through the redirect after quiz creation"
-in the specific way that triggers them. That's the actual argument for
-running the app, not just testing it in isolation.
+None of these were caught by the 32 passing backend tests at the time,
+because none of those tests happened to chain "fetch an entity -> let the
+transaction end -> read a lazy field" or "click through the redirect after
+quiz creation" in the specific way that triggers them. That's the actual
+argument for running the app, not just testing it in isolation.
+
+All three now have a regression test that would catch a revert:
+`CourseIntegrationTest` asserts on the actual JSON content of
+`GET /api/courses` and `GET /api/courses/{id}/quizzes` (not just that the
+calls succeed), and `frontend/e2e/full-flow.spec.ts` asserts the instructor
+lands back on the course page - not `/instructor` - immediately after
+creating a quiz, and that the course page actually renders the instructor's
+name rather than hanging on "Loading…".
 
 ## RBAC and auth
 
@@ -188,9 +214,14 @@ cd frontend && npm install && npm run dev   # http://localhost:5173, proxies /ap
 ### Tests
 
 ```bash
-cd backend && mvn test      # 32 tests: 11 SM-2 unit tests, 21 Testcontainers
+cd backend && mvn test      # 35 tests: 11 SM-2 unit tests, 24 Testcontainers
                              # integration tests (real Postgres) - needs Docker running
 cd frontend && npx vitest run && npx tsc -b
+
+# E2E (real backend + Postgres + frontend, driven with a real browser - see
+# frontend/e2e/full-flow.spec.ts). Start the backend and frontend dev server
+# first (see "Local development" above), then:
+cd frontend && npx playwright install chromium && npm run e2e
 ```
 
 ## Project layout
@@ -203,14 +234,17 @@ backend/src/main/java/com/learning/platform/
                 queries the "bugs found" section above is about
   service/      SpacedRepetitionService (SM-2), QuizAttemptService
                 (grading + concurrency), CourseService (RBAC ownership)
-  security/     JwtService, JwtAuthenticationFilter
+  security/     JwtService, JwtAuthenticationFilter, RateLimitFilter
   controller/   REST controllers
   dto/          Request/response records
 backend/src/test/java/.../
   service/SpacedRepetitionServiceTest.java    11 unit tests vs. SM-2 spec
-  integration/  Testcontainers-backed: Auth, Rbac, QuizFlow, QuizConcurrency
+  integration/  Testcontainers-backed: Auth, Rbac, QuizFlow, QuizConcurrency,
+                Course (lazy-loading regressions), RateLimit
 frontend/src/
   pages/        One component per route
   api/          Axios client with automatic access-token refresh
   hooks/AuthContext.tsx
+frontend/e2e/    Playwright, driven against a real backend + Postgres - see
+                 full-flow.spec.ts and playwright.config.ts
 ```

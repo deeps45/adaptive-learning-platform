@@ -24,6 +24,17 @@ app:
     secret: ${JWT_SECRET:dev-only-secret-change-me-0123456789abcdefghijklmnopqrstuvwxyz}
     access-token-ttl-minutes: 15
     refresh-token-ttl-days: 7
+  rate-limit:
+    auth-requests-per-minute: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
 
 springdoc:
   swagger-ui:

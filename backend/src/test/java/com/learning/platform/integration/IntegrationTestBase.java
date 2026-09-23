@@ -6,10 +6,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.learning.platform.security.RateLimitFilter;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,6 +57,17 @@ public abstract class IntegrationTestBase {
 
     @Autowired protected MockMvc mockMvc;
     @Autowired protected ObjectMapper objectMapper;
+    @Autowired private RateLimitFilter rateLimitFilter;
+
+    /** All tests in this suite share one Spring context (and therefore one RateLimitFilter
+     * instance) across many classes, all hitting register/login through MockMvc's fixed
+     * "127.0.0.1" remote address - clear its state before every test so unrelated tests don't
+     * exhaust each other's per-IP bucket. See RateLimitIntegrationTest for the class that actually
+     * exercises the limit itself. */
+    @BeforeEach
+    void resetRateLimiter() {
+        rateLimitFilter.resetForTests();
+    }
 
     /** Registers a fresh user (unique email per call) and returns their access token. */
     protected String registerAndLogin(String role) throws Exception {

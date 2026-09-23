@@ -2,6 +2,7 @@ package com.learning.platform.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.learning.platform.security.JwtAuthenticationFilter;
+import com.learning.platform.security.RateLimitFilter;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,9 +29,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RateLimitFilter rateLimitFilter;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, RateLimitFilter rateLimitFilter) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.rateLimitFilter = rateLimitFilter;
     }
 
     @Bean
@@ -72,7 +75,10 @@ public class SecurityConfig {
                                         .permitAll()
                                         .anyRequest()
                                         .authenticated())
-                .addFilterBefore(jwtAuthenticationFilter, AuthorizationFilter.class);
+                .addFilterBefore(jwtAuthenticationFilter, AuthorizationFilter.class)
+                // Rate limiting runs before authentication is even attempted - a brute-force
+                // login attempt shouldn't get a free JWT-parsing pass before being throttled.
+                .addFilterBefore(rateLimitFilter, JwtAuthenticationFilter.class);
         return http.build();
     }
 
